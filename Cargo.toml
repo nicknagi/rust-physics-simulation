@@ -1,0 +1,17 @@
+[package]
+
+name = "simulation"
+version = "0.1.0"
+authors = [
+    "TyOverby <ty@pre-alpha.com>",
+    "Nikita Pekin <contact@nikitapek.in>"
+]
+
+[[bin]]
+name = "simulation"
+
+[dependencies]
+piston = "0.53.0"
+piston2d-graphics = "0.40.0"
+pistoncore-glutin_window = "0.69.0"
+piston2d-opengl_graphics = "0.78.0"

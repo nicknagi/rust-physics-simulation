@@ -100,8 +100,8 @@ fn main() {
     let num_balls: u32 = num_balls.trim().parse().expect("Wanted a number");
 
     // Window resolution
-    let width = 1200.0;
-    let height = 600.0;
+    let width = 1920.0;
+    let height = 1080.0;
 
     // Create an Glutin window.
     let mut window: Window = WindowSettings::new("simulation", [width, height])
@@ -126,7 +126,7 @@ fn main() {
                 y: rng.gen_range(radius..50.0 - radius),
             },
             radius,
-            color: [rng.gen::<f32>(), rng.gen::<f32>(), rng.gen::<f32>(), 1.0],
+            color: [rng.gen_range(0.2..1.0), rng.gen_range(0.2..1.0), rng.gen_range(0.2..1.0), rng.gen_range(0.5..1.0)],
         });
     }
 

@@ -3,8 +3,7 @@
 name = "simulation"
 version = "0.1.0"
 authors = [
-    "TyOverby <ty@pre-alpha.com>",
-    "Nikita Pekin <contact@nikitapek.in>"
+    "Nekhil Nagia"
 ]
 
 [[bin]]

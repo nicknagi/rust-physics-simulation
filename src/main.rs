@@ -6,13 +6,14 @@ extern crate piston;
 use glutin_window::GlutinWindow as Window;
 use opengl_graphics::{GlGraphics, OpenGL};
 use piston::event_loop::{EventSettings, Events};
-use piston::input::{RenderArgs, RenderEvent, UpdateEvent};
+use piston::input::{RenderArgs, RenderEvent, UpdateArgs, UpdateEvent};
 use piston::window::WindowSettings;
 use rand::Rng;
 use std::io;
 
 // Ball object with physics properties
 struct Ball {
+    acceleration: Vector2D,
     velocity: Vector2D,
     location: Vector2D,
     radius: f64,
@@ -50,35 +51,48 @@ impl Simulation {
         });
     }
 
-    fn update(&mut self) {
+    fn update(&mut self, args: &UpdateArgs) {
         for ball in self.balls.iter_mut() {
+            // Update Ball velocity
+            ball.velocity = Vector2D {
+                x: ball.velocity.x + ball.acceleration.x * args.dt * self.simulation_factor as f64,
+                y: ball.velocity.y + ball.acceleration.y * args.dt * self.simulation_factor as f64
+            };
+
             // Update ball location
             ball.location = Vector2D {
-                x: ball.location.x + ball.velocity.x * self.simulation_factor as f64,
-                y: ball.location.y + ball.velocity.y * self.simulation_factor as f64,
+                x: ball.location.x + ball.velocity.x * self.simulation_factor as f64 * args.dt,
+                y: ball.location.y + ball.velocity.y * self.simulation_factor as f64 * args.dt,
             };
 
             // Check for collisions with window boundaries
-            if ball.location.y + ball.radius >= self.resolution.1 {
+            if ball.location.y + ball.radius > self.resolution.1 {
                 ball.velocity = Vector2D {
                     x: ball.velocity.x,
                     y: -1.0 * ball.velocity.y,
                 };
-            } else if ball.location.y - ball.radius < 0.0 {
+                ball.location.y = self.resolution.1 - ball.radius;
+            } 
+            if ball.location.y - ball.radius < 0.0 {
                 ball.velocity = Vector2D {
                     x: ball.velocity.x,
                     y: -1.0 * ball.velocity.y,
                 };
-            } else if ball.location.x + ball.radius >= self.resolution.0 {
+                ball.location.y = ball.radius;
+            } 
+            if ball.location.x + ball.radius > self.resolution.0 {
                 ball.velocity = Vector2D {
                     x: -1.0 * ball.velocity.x,
                     y: ball.velocity.y,
                 };
-            } else if ball.location.x - ball.radius < 0.0 {
+                ball.location.x = self.resolution.0 - ball.radius;
+            } 
+            if ball.location.x - ball.radius < 0.0 {
                 ball.velocity = Vector2D {
                     x: -1.0 * ball.velocity.x,
                     y: ball.velocity.y,
                 };
+                ball.location.x = ball.radius;
             }
         }
     }
@@ -100,8 +114,8 @@ fn main() {
     let num_balls: u32 = num_balls.trim().parse().expect("Wanted a number");
 
     // Window resolution
-    let width = 1920.0;
-    let height = 1080.0;
+    let width = 1200.0;
+    let height = 600.0;
 
     // Create an Glutin window.
     let mut window: Window = WindowSettings::new("simulation", [width, height])
@@ -117,6 +131,10 @@ fn main() {
 
     for _ in 0..num_balls {
         balls.push(Ball {
+            acceleration: Vector2D {
+                x: 0.0,
+                y: 0.09,
+            },
             velocity: Vector2D {
                 x: rng.gen_range(-1.0..1.0),
                 y: rng.gen_range(-1.0..1.0),
@@ -135,17 +153,18 @@ fn main() {
         gl: GlGraphics::new(opengl),
         balls: balls,
         resolution: (width, height),
-        simulation_factor: 1,
+        simulation_factor: 100,
     };
 
     let mut events = Events::new(EventSettings::new());
+
     while let Some(e) = events.next(&mut window) {
         if let Some(args) = e.render_args() {
             simulation.render(&args);
         }
 
-        if let Some(_) = e.update_args() {
-            simulation.update();
+        if let Some(args) = e.update_args() {
+            simulation.update(&args);
         }
     }
 }

@@ -171,3 +171,4 @@ fn main() {
 
 // TODO: 
 // 1. Play with forces: force on ball attracting towards random ball, gravitational attraction, electric charge simulation etc.
+// 2. Implement particle collisions

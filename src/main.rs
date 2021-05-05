@@ -140,8 +140,8 @@ fn main() {
                 y: rng.gen_range(-1.0..1.0),
             },
             location: Vector2D {
-                x: rng.gen_range(radius..50.0 - radius),
-                y: rng.gen_range(radius..50.0 - radius),
+                x: rng.gen_range(radius .. (50.0 - radius)),
+                y: rng.gen_range(radius .. (50.0 - radius)),
             },
             radius,
             color: [rng.gen_range(0.2..1.0), rng.gen_range(0.2..1.0), rng.gen_range(0.2..1.0), rng.gen_range(0.5..1.0)],
@@ -168,3 +168,6 @@ fn main() {
         }
     }
 }
+
+// TODO: 
+// 1. Play with forces: force on ball attracting towards random ball, gravitational attraction, electric charge simulation etc.

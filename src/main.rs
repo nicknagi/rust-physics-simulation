@@ -9,33 +9,24 @@ use piston::event_loop::{EventSettings, Events};
 use piston::input::{RenderArgs, RenderEvent, UpdateArgs, UpdateEvent};
 use piston::window::WindowSettings;
 
-struct Trajectory2D {
-    m: f64, // slope of the line
-    b: f64, // y-intercept of the line
-    x_update: f64, // x update direction and scale factor
-    current_location: Point2D
+struct Ball {
+    velocity: Vector2D,
+    location: Vector2D
 }
 
-struct Point2D {
+struct Vector2D {
     x: f64, 
     y: f64
 }
 
 pub struct Simulation {
     gl: GlGraphics, // OpenGL drawing backend.
-    trajectory: Trajectory2D,  // Rotation for the circle.
+    balls: Vec<Ball>,  // Collection of objects in scene
     resolution: (f64,f64),
+    simulation_factor: u32
 }
 
 impl Simulation {
-    fn calculate_new_location(&self, traj: &Trajectory2D) -> Point2D {
-        let x = traj.current_location.x + traj.x_update;
-        Point2D {
-            x: x,
-            y: traj.m * x + traj.b
-        }
-    }
-
     fn render(&mut self, args: &RenderArgs) {
         use graphics::*;
 
@@ -45,32 +36,46 @@ impl Simulation {
 
         let circle = rectangle::centered_square(0.0, 0.0, 50.0);
 
-        self.trajectory.current_location = self.calculate_new_location(&self.trajectory);
-        let (x1, y1) = (self.trajectory.current_location.x, self.trajectory.current_location.y);
+        let balls = &self.balls;
 
         self.gl.draw(args.viewport(), |c, gl| {
             // Clear the screen.
             clear(BLACK, gl);
-
-            let transform1 = c
+            
+            for ball in balls.iter() {
+                let transform1 = c
                 .transform
-                .trans(x1, y1);
+                .trans(ball.location.x, ball.location.y);
 
-            ellipse(RED, circle, transform1, gl);
+                ellipse(RED, circle, transform1, gl);
+            }
         });
     }
 
     fn update(&mut self, args: &UpdateArgs) {
-        if self.trajectory.current_location.y + 50.0 > self.resolution.1 {
-            self.trajectory.m = self.trajectory.m * -1.0;
-            self.trajectory.b = 2.0*(self.resolution.1-50.0);
-        }
-
         // Rotate 2 radians per second.
         // self.location.0 = 100.0;
         // self.location.1 += 1.0;
 
         // self.location2.0 += args.dt*50.0;
+
+        for ball in self.balls.iter_mut() {
+            ball.location = Vector2D {
+                x: ball.location.x + ball.velocity.x * self.simulation_factor as f64,
+                y: ball.location.y + ball.velocity.y * self.simulation_factor as f64
+            };
+            if ball.location.y + 50.0 >= self.resolution.1 {
+                ball.velocity = Vector2D {x: ball.velocity.x, y: -1.0 * ball.velocity.y};
+            } else if ball.location.y - 50.0 < 0.0 {
+                ball.velocity = Vector2D {x: ball.velocity.x, y: -1.0 * ball.velocity.y};
+            } else if ball.location.x + 50.0 >= self.resolution.0 {
+                ball.velocity = Vector2D {x: -1.0 * ball.velocity.x, y: ball.velocity.y};
+            } else if ball.location.x - 50.0 < 0.0 {
+                ball.velocity = Vector2D {x: -1.0 * ball.velocity.x, y: ball.velocity.y};
+            }
+        }
+
+
     }
 }
 
@@ -88,18 +93,19 @@ fn main() {
         .build()
         .unwrap();
 
+    // Create objects in simulation
+    let mut balls = Vec::new();
+    balls.push(Ball {
+        velocity: Vector2D{x: 1.0, y: 1.0},
+        location: Vector2D{x: 50.0, y: 50.0}
+    });
+
     // Create a new game and run it.
     let mut simulation = Simulation {
         gl: GlGraphics::new(opengl),
-        trajectory: Trajectory2D {
-            m: 1.0,
-            b: 0.0,
-            x_update: 2.0,
-            current_location: Point2D {
-                x: 0.0, y: 0.0
-            }
-        },
-        resolution: (width, height)
+        balls: balls,
+        resolution: (width, height),
+        simulation_factor: 1
     };
 
     let mut events = Events::new(EventSettings::new());

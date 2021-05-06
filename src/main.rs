@@ -118,9 +118,6 @@ impl Simulation {
             acc_updates.insert(i as u32, acc);
         }
 
-        // Check for collisions with other particles and update each ball
-        self.balls = self.check_for_collisions_and_update_velocity();
-
         for (i, ball) in self.balls.iter_mut().enumerate() {
             // Update Ball Acceleration
             ball.acceleration = *acc_updates.get(&(i as u32)).expect("Did not want this");
@@ -167,6 +164,9 @@ impl Simulation {
                 ball.location.x = ball.radius;
             }
         }
+
+        // Check for collisions with other particles and update each ball
+        self.balls = self.check_for_collisions_and_update_velocity();
     }
 
     fn check_for_collisions_and_update_velocity(&mut self) -> Vec<Ball> {
@@ -193,9 +193,12 @@ impl Simulation {
                 if !is_collision {
                     break;
                 }
+
+                const EPSILON: f64 = 1e-6;
+
                 // Resolve weird collision
-                let loc_update = location_updates[j].subtract(&location_updates[i]).normalize().scale(ball1.radius + ball2.radius);
-                location_updates[j] = location_updates[j].add(&loc_update);
+                let loc_update = location_updates[j].subtract(&location_updates[i]).normalize().scale(ball1.radius + ball2.radius + EPSILON);
+                location_updates[j] = location_updates[i].add(&loc_update);
 
                 // Update the particle velocities
                 let v1_minus_v2 = collision_updates[i].subtract(&collision_updates[j]);

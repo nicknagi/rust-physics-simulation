@@ -51,10 +51,6 @@ impl Vector2D {
         }
     }
 
-    fn distance(&self, other: &Vector2D) -> f64 {
-        return self.subtract(other).norm();
-    }
-
     fn scale(&self, scale: f64) -> Vector2D {
         Vector2D {
             x: scale * self.x,
@@ -192,7 +188,7 @@ fn main() {
 
     // Create objects in simulation
     let mut balls = Vec::new();
-    let radius = 10.0;
+    let radius = 15.0;
     let mut rng = rand::thread_rng();
 
     for _ in 0..num_balls {
@@ -203,8 +199,8 @@ fn main() {
                 y: rng.gen_range(-100.0..100.0),
             },
             location: Vector2D {
-                x: rng.gen_range(radius..(100.0 - radius)),
-                y: rng.gen_range(radius..(100.0 - radius)),
+                x: rng.gen_range(0.0..(width)),
+                y: rng.gen_range(0.0..(height)),
             },
             radius,
             color: [

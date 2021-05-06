@@ -21,9 +21,46 @@ struct Ball {
 }
 
 // 2D vector representation
+#[derive(Copy, Clone, Debug)]
 struct Vector2D {
     x: f64,
     y: f64,
+}
+
+impl Vector2D {
+    fn norm(&self) -> f64 {
+        return (self.x * self.x + self.y * self.y).sqrt();
+    }
+
+    fn normalize(&mut self) {
+        self.x = self.x / self.norm();
+        self.y = self.y / self.norm();
+    }
+
+    fn subtract(&self, other: &Vector2D) -> Vector2D {
+        Vector2D {
+            x: self.x - other.x,
+            y: self.y - other.y,
+        }
+    }
+
+    fn add(&self, other: &Vector2D) -> Vector2D {
+        Vector2D {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+
+    fn distance(&self, other: &Vector2D) -> f64 {
+        return self.subtract(other).norm();
+    }
+
+    fn scale(&self, scale: f64) -> Vector2D {
+        Vector2D {
+            x: scale * self.x,
+            y: scale * self.y,
+        }
+    }
 }
 
 pub struct Simulation {
@@ -52,11 +89,40 @@ impl Simulation {
     }
 
     fn update(&mut self, args: &UpdateArgs) {
-        for ball in self.balls.iter_mut() {
+        use std::collections::HashMap;
+
+        let mut acc_updates: HashMap<u32, Vector2D> = HashMap::new();
+        // Calculate Forces on each ball
+        for i in 0..self.balls.len() {
+            let mut acc = Vector2D { x: 0.0, y: 0.0 };
+            let current_ball = &self.balls[i];
+            for j in 0..self.balls.len() {
+                if i == j {
+                    continue;
+                }
+                // Gravitation force
+                let mut gravitation_dir = self.balls[j].location.subtract(&current_ball.location);
+                let mut magnitude = 1e9 / ((gravitation_dir.norm() * gravitation_dir.norm()) + 1.0);
+                if magnitude > 100.0 {
+                    magnitude = 100.0;
+                }
+                gravitation_dir.normalize();
+                let gravitation_force = gravitation_dir.scale(magnitude*1.0);
+                acc = acc.add(&gravitation_force);
+            }
+            // Adding constant acceleration
+            acc = acc.add(&Vector2D{x: 0.0, y: 0.0});
+            acc_updates.insert(i as u32, acc);
+        }
+
+        for (i, ball) in self.balls.iter_mut().enumerate() {
+            // Update Ball Acceleration
+            ball.acceleration = *acc_updates.get(&(i as u32)).expect("Did not want this");
+
             // Update Ball velocity
             ball.velocity = Vector2D {
                 x: ball.velocity.x + ball.acceleration.x * args.dt * self.simulation_factor as f64,
-                y: ball.velocity.y + ball.acceleration.y * args.dt * self.simulation_factor as f64
+                y: ball.velocity.y + ball.acceleration.y * args.dt * self.simulation_factor as f64,
             };
 
             // Update ball location
@@ -72,21 +138,21 @@ impl Simulation {
                     y: -1.0 * ball.velocity.y,
                 };
                 ball.location.y = self.resolution.1 - ball.radius;
-            } 
+            }
             if ball.location.y - ball.radius < 0.0 {
                 ball.velocity = Vector2D {
                     x: ball.velocity.x,
                     y: -1.0 * ball.velocity.y,
                 };
                 ball.location.y = ball.radius;
-            } 
+            }
             if ball.location.x + ball.radius > self.resolution.0 {
                 ball.velocity = Vector2D {
                     x: -1.0 * ball.velocity.x,
                     y: ball.velocity.y,
                 };
                 ball.location.x = self.resolution.0 - ball.radius;
-            } 
+            }
             if ball.location.x - ball.radius < 0.0 {
                 ball.velocity = Vector2D {
                     x: -1.0 * ball.velocity.x,
@@ -131,20 +197,22 @@ fn main() {
 
     for _ in 0..num_balls {
         balls.push(Ball {
-            acceleration: Vector2D {
-                x: 0.0,
-                y: 0.09,
-            },
+            acceleration: Vector2D { x: 0.0, y: 0.0 },
             velocity: Vector2D {
-                x: rng.gen_range(-1.0..1.0),
-                y: rng.gen_range(-1.0..1.0),
+                x: rng.gen_range(-100.0..100.0),
+                y: rng.gen_range(-100.0..100.0),
             },
             location: Vector2D {
-                x: rng.gen_range(radius .. (50.0 - radius)),
-                y: rng.gen_range(radius .. (50.0 - radius)),
+                x: rng.gen_range(radius..(100.0 - radius)),
+                y: rng.gen_range(radius..(100.0 - radius)),
             },
             radius,
-            color: [rng.gen_range(0.2..1.0), rng.gen_range(0.2..1.0), rng.gen_range(0.2..1.0), rng.gen_range(0.5..1.0)],
+            color: [
+                rng.gen_range(0.2..1.0),
+                rng.gen_range(0.2..1.0),
+                rng.gen_range(0.2..1.0),
+                rng.gen_range(0.5..1.0),
+            ],
         });
     }
 
@@ -153,7 +221,7 @@ fn main() {
         gl: GlGraphics::new(opengl),
         balls: balls,
         resolution: (width, height),
-        simulation_factor: 100,
+        simulation_factor: 1,
     };
 
     let mut events = Events::new(EventSettings::new());
@@ -169,6 +237,6 @@ fn main() {
     }
 }
 
-// TODO: 
+// TODO:
 // 1. Play with forces: force on ball attracting towards random ball, gravitational attraction, electric charge simulation etc.
 // 2. Implement particle collisions

@@ -119,7 +119,9 @@ impl Simulation {
             acc_updates.insert(i as u32, acc);
         }
 
-        for (i, ball) in self.balls.iter_mut().enumerate() {
+        let mut balls_copy = self.balls.to_vec();
+
+        for (i, ball) in balls_copy.iter_mut().enumerate() {
             // Update Ball Acceleration
             ball.acceleration = *acc_updates.get(&(i as u32)).expect("Did not want this");
 
@@ -129,6 +131,13 @@ impl Simulation {
                 y: ball.velocity.y + ball.acceleration.y * args.dt * self.simulation_factor as f64,
             };
 
+            if ball.velocity.x.abs() > 100.0 {
+                ball.velocity.x = 100.0;
+            }
+            if ball.velocity.y.abs() > 100.0 {
+                ball.velocity.y = 100.0;
+            }
+
             ball.prev_location = ball.location;
 
             // Update ball location
@@ -137,39 +146,45 @@ impl Simulation {
                 y: ball.location.y + ball.velocity.y * self.simulation_factor as f64 * args.dt,
             };
 
-            // Check for collisions with window boundaries
-            if ball.location.y + ball.radius > self.resolution.1 {
-                ball.velocity = Vector2D {
-                    x: ball.velocity.x,
-                    y: -1.0 * ball.velocity.y,
-                };
-                ball.location.y = self.resolution.1 - ball.radius;
-            }
-            if ball.location.y - ball.radius < 0.0 {
-                ball.velocity = Vector2D {
-                    x: ball.velocity.x,
-                    y: -1.0 * ball.velocity.y,
-                };
-                ball.location.y = ball.radius;
-            }
-            if ball.location.x + ball.radius > self.resolution.0 {
-                ball.velocity = Vector2D {
-                    x: -1.0 * ball.velocity.x,
-                    y: ball.velocity.y,
-                };
-                ball.location.x = self.resolution.0 - ball.radius;
-            }
-            if ball.location.x - ball.radius < 0.0 {
-                ball.velocity = Vector2D {
-                    x: -1.0 * ball.velocity.x,
-                    y: ball.velocity.y,
-                };
-                ball.location.x = ball.radius;
-            }
+            self.clamp_ball_location(ball);
         }
+
+        self.balls = balls_copy;
 
         // Check for collisions with other particles and update each ball
         self.balls = self.check_for_collisions_and_update_velocity();
+    }
+
+    fn clamp_ball_location(&self, ball: &mut Ball) {
+        // Check for collisions with window boundaries
+        if ball.location.y + ball.radius > self.resolution.1 {
+            ball.velocity = Vector2D {
+                x: ball.velocity.x,
+                y: -1.0 * ball.velocity.y,
+            };
+            ball.location.y = self.resolution.1 - ball.radius;
+        }
+        if ball.location.y - ball.radius < 0.0 {
+            ball.velocity = Vector2D {
+                x: ball.velocity.x,
+                y: -1.0 * ball.velocity.y,
+            };
+            ball.location.y = ball.radius;
+        }
+        if ball.location.x + ball.radius > self.resolution.0 {
+            ball.velocity = Vector2D {
+                x: -1.0 * ball.velocity.x,
+                y: ball.velocity.y,
+            };
+            ball.location.x = self.resolution.0 - ball.radius;
+        }
+        if ball.location.x - ball.radius < 0.0 {
+            ball.velocity = Vector2D {
+                x: -1.0 * ball.velocity.x,
+                y: ball.velocity.y,
+            };
+            ball.location.x = ball.radius;
+        }
     }
 
     fn check_for_collisions_and_update_velocity(&mut self) -> Vec<Ball> {
@@ -191,34 +206,9 @@ impl Simulation {
                 let is_collision = location_updates[i].subtract(&location_updates[j]).norm() <= ball1.radius + ball2.radius;
 
                 if !is_collision {
-                    break;
+                    continue;
                 }
-
-                // Resolve weird collision 2
-                // TODO: Solve parametric equation solution to find right intersection point, then backtrack delta_t
-                //       Then, compute collision response and compensate for time
-
-                // Solving parametric equations for backtracking
-                // source: http://people.scs.carleton.ca/~nussbaum/courses/COMP3501/notes/collision_2012.pdf
-                let v = ball1.prev_location.subtract(&ball2.prev_location);
-                let u = (location_updates[i].subtract(&ball1.prev_location)).subtract(&location_updates[j].subtract(&ball2.prev_location));
-                let uv = u.dot(&v);
-                let u_squared = u.norm().powi(2);
-                let v_squared = v.norm().powi(2);
-
-                let determinant = (uv.powi(2) - (u_squared * (v_squared - (ball1.radius + ball2.radius).powi(2)))).sqrt();
-                let t2 = (-uv - determinant) / u_squared;
-                let mut backtrack_time = 0.0;                
-                if t2 < 1.0 {
-                    location_updates[i] = ball1.prev_location.add(&(location_updates[i].subtract(&ball1.prev_location)).scale(t2));
-                    location_updates[j] = ball2.prev_location.add(&(location_updates[j].subtract(&ball2.prev_location)).scale(t2));
-                    backtrack_time = (location_updates[i].subtract(&ball1.prev_location)).scale(1.0 - t2).norm() / velocity_updates[i].norm();
-                    let backtrack_time2 = (location_updates[j].subtract(&ball2.prev_location)).scale(1.0 - t2).norm() / velocity_updates[j].norm();
-                    if (backtrack_time - backtrack_time2).abs() > 1e-6 {
-                        println!("Wow this should not be happening {}, {}", backtrack_time, backtrack_time2);
-                    }
-                }
-
+                // println!("Collision");
                 // Update the particle velocities
                 let v1_minus_v2 = velocity_updates[i].subtract(&velocity_updates[j]);
                 let x1_minus_x2 = location_updates[i].subtract(&location_updates[j]);
@@ -237,16 +227,24 @@ impl Simulation {
                 velocity_updates[i] = velocity_ball1;
                 velocity_updates[j] = velocity_ball2;
 
-                if t2 < 1.0 {
-                    location_updates[i] = location_updates[i].add(&velocity_updates[i].scale(backtrack_time));
-                    location_updates[j] = location_updates[j].add(&velocity_updates[j].scale(backtrack_time));
+                const SMALL_T: f64 = 0.00001;
+
+                loop {
+                    let is_collision = location_updates[i].subtract(&location_updates[j]).norm() <= ball1.radius + ball2.radius;
+                    if !is_collision {
+                        break;
+                    }
+
+                    location_updates[i] = location_updates[i].add(&velocity_updates[i].scale(SMALL_T));
+                    location_updates[j] = location_updates[j].add(&velocity_updates[j].scale(SMALL_T));
                 }
             }
         }
 
-        for i in 0..sorted_balls.len() {
-            sorted_balls[i].velocity = velocity_updates[i];
-            sorted_balls[i].location = location_updates[i];
+        for (i, ball) in sorted_balls.iter_mut().enumerate() {
+            ball.velocity = velocity_updates[i];
+            ball.location = location_updates[i];
+            self.clamp_ball_location(ball);
         }
 
         return sorted_balls;
@@ -303,7 +301,7 @@ fn main() {
                 rng.gen_range(0.2..1.0),
                 rng.gen_range(0.5..1.0),
             ],
-            mass: 1.0,
+            mass: 1e18,
         });
     }
 
@@ -314,8 +312,9 @@ fn main() {
         resolution: (width, height),
         simulation_factor: 1.0,
     };
-
-    let mut events = Events::new(EventSettings::new());
+    let mut settings = EventSettings::new();
+    settings.ups = 100000;
+    let mut events = Events::new(settings);
 
     while let Some(e) = events.next(&mut window) {
         if let Some(args) = e.render_args() {

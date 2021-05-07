@@ -74,6 +74,7 @@ pub struct Simulation {
     balls: Vec<Ball>, // Collection of objects in scene
     resolution: (f64, f64),
     simulation_factor: f64,
+    gravity_on: bool,
 }
 
 impl Simulation {
@@ -101,18 +102,23 @@ impl Simulation {
         // Calculate Forces on each ball
         for i in 0..self.balls.len() {
             let mut acc = Vector2D { x: 0.0, y: 0.0 };
-            let current_ball = &self.balls[i];
-            for j in 0..self.balls.len() {
-                if i == j {
-                    continue;
+            if self.gravity_on {
+                let current_ball = &self.balls[i];
+                for j in 0..self.balls.len() {
+                    if i == j {
+                        continue;
+                    }
+                    // Gravitation force
+                    let mut gravitation_dir = self.balls[j].location.subtract(&current_ball.location);
+                    let mut magnitude =
+                        G * self.balls[j].mass / ((gravitation_dir.norm() * gravitation_dir.norm()));
+                    if magnitude > 100.0 {
+                        magnitude = 100.0;
+                    }
+                    gravitation_dir = gravitation_dir.normalize();
+                    let gravitation_force = gravitation_dir.scale(magnitude * 1.0);
+                    acc = acc.add(&gravitation_force);
                 }
-                // Gravitation force
-                let mut gravitation_dir = self.balls[j].location.subtract(&current_ball.location);
-                let magnitude =
-                    G * self.balls[j].mass / (gravitation_dir.norm() * gravitation_dir.norm());
-                gravitation_dir = gravitation_dir.normalize();
-                let gravitation_force = gravitation_dir.scale(magnitude * 0.0);
-                acc = acc.add(&gravitation_force);
             }
             // Adding constant acceleration
             acc = acc.add(&Vector2D { x: 0.0, y: 0.0 });
@@ -131,11 +137,8 @@ impl Simulation {
                 y: ball.velocity.y + ball.acceleration.y * args.dt * self.simulation_factor as f64,
             };
 
-            if ball.velocity.x.abs() > 100.0 {
-                ball.velocity.x = 100.0;
-            }
-            if ball.velocity.y.abs() > 100.0 {
-                ball.velocity.y = 100.0;
+            if ball.velocity.norm() > 100.0 {
+                ball.velocity = ball.velocity.normalize().scale(100.0);
             }
 
             ball.prev_location = ball.location;
@@ -203,12 +206,12 @@ impl Simulation {
                 let ball1 = &sorted_balls[i];
                 let ball2 = &sorted_balls[j];
             
-                let is_collision = location_updates[i].subtract(&location_updates[j]).norm() <= ball1.radius + ball2.radius;
+                let is_collision = location_updates[i].subtract(&location_updates[j]).norm() < ball1.radius + ball2.radius;
 
                 if !is_collision {
                     continue;
                 }
-                // println!("Collision");
+
                 // Update the particle velocities
                 let v1_minus_v2 = velocity_updates[i].subtract(&velocity_updates[j]);
                 let x1_minus_x2 = location_updates[i].subtract(&location_updates[j]);
@@ -231,6 +234,10 @@ impl Simulation {
                 
                 // Naive way to resolve overlapping collision
                 loop {
+                    if velocity_updates[i].norm() < 1e-4 && velocity_updates[j].norm() < 1e-4 {
+                        break;
+                    }
+
                     let is_collision = location_updates[i].subtract(&location_updates[j]).norm() <= ball1.radius + ball2.radius;
                     if !is_collision {
                         break;
@@ -267,6 +274,20 @@ fn main() {
 
     let num_balls: u32 = num_balls.trim().parse().expect("Wanted a number");
 
+    let mut gravity = String::new();
+    println!("Do you want gravitational attraction (0 is No, any other number yes): ");
+
+    io::stdin()
+        .read_line(&mut gravity)
+        .ok()
+        .expect("Couldn't read line");
+
+    let gravity: u32 = gravity.trim().parse().expect("Wanted a number");
+    let mut gravity_on = false;
+    if gravity != 0 {
+        gravity_on = true;
+    }
+
     // Window resolution
     let width = 1200.0;
     let height = 600.0;
@@ -302,7 +323,7 @@ fn main() {
                 rng.gen_range(0.2..1.0),
                 rng.gen_range(0.5..1.0),
             ],
-            mass: 1e18,
+            mass: 1e16,
         });
     }
 
@@ -312,6 +333,7 @@ fn main() {
         balls: balls,
         resolution: (width, height),
         simulation_factor: 1.0,
+        gravity_on: gravity_on
     };
     let mut settings = EventSettings::new();
     settings.ups = 1000;

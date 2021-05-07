@@ -1,3 +1,4 @@
+
 # Rust Physics Simulation
 
 A simple physics simulation built with Rust. Goal of the project was to learn basic rust while doing something fun.
@@ -21,7 +22,6 @@ Forces: Arbitrary forces can be applied and resolved on each particles, feel fre
 
 https://user-images.githubusercontent.com/14340000/117506070-feaf1c00-af52-11eb-9a01-975626356f65.mov
 
-
-
 https://user-images.githubusercontent.com/14340000/117506148-1ededb00-af53-11eb-9a87-280a40dbf966.mov
 
+https://user-images.githubusercontent.com/14340000/117507623-4c2c8880-af55-11eb-9745-2f5d5d828287.mov

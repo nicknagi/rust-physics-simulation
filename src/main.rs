@@ -184,24 +184,16 @@ impl Simulation {
             for j in (i + 1)..sorted_balls.len() {
                 let ball1 = &sorted_balls[i];
                 let ball2 = &sorted_balls[j];
-                let is_collision_possible_collision = (location_updates[i].x - location_updates[j].x).abs()
-                    <= (ball1.radius + ball2.radius);
-
-                if !is_collision_possible_collision {
-                    break;
-                }
-
+            
                 let is_collision = location_updates[i].subtract(&location_updates[j]).norm() <= ball1.radius + ball2.radius;
 
                 if !is_collision {
                     break;
                 }
 
-                const EPSILON: f64 = 1e-6;
-
-                // Resolve weird collision
-                let loc_update = location_updates[j].subtract(&location_updates[i]).normalize().scale(ball1.radius + ball2.radius + EPSILON);
-                location_updates[j] = location_updates[i].add(&loc_update);
+                // Resolve weird collision 2
+                // TODO: Solve parametric equation solution to find right intersection point, then backtrack delta_t
+                //       Then, compute collision response and compensate for time
 
                 // Update the particle velocities
                 let v1_minus_v2 = velocity_updates[i].subtract(&velocity_updates[j]);
@@ -220,9 +212,6 @@ impl Simulation {
                 
                 velocity_updates[i] = velocity_ball1;
                 velocity_updates[j] = velocity_ball2;
-
-                // TODO: figure out genuine path after collision. how? by doing the resolve and figuring out how much time has been
-                // rewinded then go in the trajectory of the new velocity for that time to get the final location
             }
         }
 
@@ -308,7 +297,3 @@ fn main() {
         }
     }
 }
-
-// TODO:
-// 1. Play with forces: force on ball attracting towards random ball, gravitational attraction, electric charge simulation etc.
-// 2. Implement particle collisions

@@ -228,7 +228,8 @@ impl Simulation {
                 velocity_updates[j] = velocity_ball2;
 
                 const SMALL_T: f64 = 0.00001;
-
+                
+                // Naive way to resolve overlapping collision
                 loop {
                     let is_collision = location_updates[i].subtract(&location_updates[j]).norm() <= ball1.radius + ball2.radius;
                     if !is_collision {
@@ -313,7 +314,7 @@ fn main() {
         simulation_factor: 1.0,
     };
     let mut settings = EventSettings::new();
-    settings.ups = 100000;
+    settings.ups = 1000;
     let mut events = Events::new(settings);
 
     while let Some(e) = events.next(&mut window) {

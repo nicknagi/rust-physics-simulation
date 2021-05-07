@@ -8,7 +8,7 @@ Implementation is not the most efficient but works well up to 10000 particles.
 
 Collision detection: a simple collision detection algorithm is used to find and resolve collisions. Approach similar to sweep and prune is used for speed.
 
-Forces: Arbitrary forces can be applied and resolved on each particles, feel free to edit the code to experiment.
+Forces: Arbitrary forces can be applied and resolved on each particles, feel free to edit the code to experiment. The current implementation includes gravitational attraction as an example. A constant force such as gravity (g) can also be applied by modifying line 125.
 
 ## Demo
 

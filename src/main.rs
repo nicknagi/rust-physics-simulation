@@ -40,7 +40,7 @@ impl Vector2D {
         return (self.dot(self)).sqrt();
     }
 
-    fn normalize(&self) -> Vector2D{
+    fn normalize(&self) -> Vector2D {
         Vector2D {
             x: self.x / self.norm(),
             y: self.y / self.norm(),
@@ -109,9 +109,10 @@ impl Simulation {
                         continue;
                     }
                     // Gravitation force
-                    let mut gravitation_dir = self.balls[j].location.subtract(&current_ball.location);
+                    let mut gravitation_dir =
+                        self.balls[j].location.subtract(&current_ball.location);
                     let mut magnitude =
-                        G * self.balls[j].mass / ((gravitation_dir.norm() * gravitation_dir.norm()));
+                        G * self.balls[j].mass / (gravitation_dir.norm() * gravitation_dir.norm());
                     if magnitude > 100.0 {
                         magnitude = 100.0;
                     }
@@ -205,9 +206,9 @@ impl Simulation {
             for j in (i + 1)..sorted_balls.len() {
                 let ball1 = &sorted_balls[i];
                 let ball2 = &sorted_balls[j];
-            
-                let is_collision = location_updates[i].subtract(&location_updates[j]).norm() < ball1.radius + ball2.radius;
 
+                let is_collision = location_updates[i].subtract(&location_updates[j]).norm()
+                    < ball1.radius + ball2.radius;
                 if !is_collision {
                     continue;
                 }
@@ -216,35 +217,37 @@ impl Simulation {
                 let v1_minus_v2 = velocity_updates[i].subtract(&velocity_updates[j]);
                 let x1_minus_x2 = location_updates[i].subtract(&location_updates[j]);
                 let distance = x1_minus_x2.norm();
-                
                 let mass_term_1 = (2.0 * ball2.mass) / (ball1.mass + ball2.mass);
                 let dot_product_term_1 = v1_minus_v2.dot(&x1_minus_x2) / (distance * distance);
-                let velocity_ball1 = velocity_updates[i].subtract(&x1_minus_x2.scale(dot_product_term_1 * mass_term_1));
+                let velocity_ball1 = velocity_updates[i]
+                    .subtract(&x1_minus_x2.scale(dot_product_term_1 * mass_term_1));
 
                 let mass_term_2 = (2.0 * ball1.mass) / (ball1.mass + ball2.mass);
                 let v2_minus_v1 = v1_minus_v2.scale(-1.0);
                 let x2_minus_x1 = x1_minus_x2.scale(-1.0);
                 let dot_product_term_2 = v2_minus_v1.dot(&x2_minus_x1) / (distance * distance);
-                let velocity_ball2 = velocity_updates[j].subtract(&x2_minus_x1.scale(dot_product_term_2 * mass_term_2));
-                
+                let velocity_ball2 = velocity_updates[j]
+                    .subtract(&x2_minus_x1.scale(dot_product_term_2 * mass_term_2));
                 velocity_updates[i] = velocity_ball1;
                 velocity_updates[j] = velocity_ball2;
 
                 const SMALL_T: f64 = 0.00001;
-                
                 // Naive way to resolve overlapping collision
                 loop {
                     if velocity_updates[i].norm() < 1e-4 && velocity_updates[j].norm() < 1e-4 {
                         break;
                     }
 
-                    let is_collision = location_updates[i].subtract(&location_updates[j]).norm() <= ball1.radius + ball2.radius;
+                    let is_collision = location_updates[i].subtract(&location_updates[j]).norm()
+                        <= ball1.radius + ball2.radius;
                     if !is_collision {
                         break;
                     }
 
-                    location_updates[i] = location_updates[i].add(&velocity_updates[i].scale(SMALL_T));
-                    location_updates[j] = location_updates[j].add(&velocity_updates[j].scale(SMALL_T));
+                    location_updates[i] =
+                        location_updates[i].add(&velocity_updates[i].scale(SMALL_T));
+                    location_updates[j] =
+                        location_updates[j].add(&velocity_updates[j].scale(SMALL_T));
                 }
             }
         }
@@ -333,7 +336,7 @@ fn main() {
         balls: balls,
         resolution: (width, height),
         simulation_factor: 1.0,
-        gravity_on: gravity_on
+        gravity_on: gravity_on,
     };
     let mut settings = EventSettings::new();
     settings.ups = 1000;

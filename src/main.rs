@@ -207,34 +207,17 @@ impl Simulation {
                 let ball1 = &sorted_balls[i];
                 let ball2 = &sorted_balls[j];
 
+                const SMALL_T: f64 = 0.00001;
+
                 let is_collision = location_updates[i].subtract(&location_updates[j]).norm()
                     < ball1.radius + ball2.radius;
                 if !is_collision {
                     continue;
                 }
 
-                // Update the particle velocities
-                let v1_minus_v2 = velocity_updates[i].subtract(&velocity_updates[j]);
-                let x1_minus_x2 = location_updates[i].subtract(&location_updates[j]);
-                let distance = x1_minus_x2.norm();
-                let mass_term_1 = (2.0 * ball2.mass) / (ball1.mass + ball2.mass);
-                let dot_product_term_1 = v1_minus_v2.dot(&x1_minus_x2) / (distance * distance);
-                let velocity_ball1 = velocity_updates[i]
-                    .subtract(&x1_minus_x2.scale(dot_product_term_1 * mass_term_1));
-
-                let mass_term_2 = (2.0 * ball1.mass) / (ball1.mass + ball2.mass);
-                let v2_minus_v1 = v1_minus_v2.scale(-1.0);
-                let x2_minus_x1 = x1_minus_x2.scale(-1.0);
-                let dot_product_term_2 = v2_minus_v1.dot(&x2_minus_x1) / (distance * distance);
-                let velocity_ball2 = velocity_updates[j]
-                    .subtract(&x2_minus_x1.scale(dot_product_term_2 * mass_term_2));
-                velocity_updates[i] = velocity_ball1;
-                velocity_updates[j] = velocity_ball2;
-
-                const SMALL_T: f64 = 0.00001;
                 // Naive way to resolve overlapping collision
                 loop {
-                    if velocity_updates[i].norm() < 1e-4 && velocity_updates[j].norm() < 1e-4 {
+                    if self.gravity_on {
                         break;
                     }
 
@@ -245,10 +228,36 @@ impl Simulation {
                     }
 
                     location_updates[i] =
-                        location_updates[i].add(&velocity_updates[i].scale(SMALL_T));
+                        location_updates[i].add(&velocity_updates[i].scale(-SMALL_T));
                     location_updates[j] =
-                        location_updates[j].add(&velocity_updates[j].scale(SMALL_T));
+                        location_updates[j].add(&velocity_updates[j].scale(-SMALL_T));
                 }
+                
+                // Update the particle velocities
+                let v1_minus_v2 = velocity_updates[i].subtract(&velocity_updates[j]);
+                let x1_minus_x2 = location_updates[i].subtract(&location_updates[j]);
+                let distance = x1_minus_x2.norm();
+                let mass_term_1 = (2.0 * ball2.mass) / (ball1.mass + ball2.mass);
+                let dot_product_term_1 = v1_minus_v2.dot(&x1_minus_x2) / (distance * distance);
+                let mut velocity_ball1 = velocity_updates[i]
+                    .subtract(&x1_minus_x2.scale(dot_product_term_1 * mass_term_1));
+
+                let mass_term_2 = (2.0 * ball1.mass) / (ball1.mass + ball2.mass);
+                let v2_minus_v1 = v1_minus_v2.scale(-1.0);
+                let x2_minus_x1 = x1_minus_x2.scale(-1.0);
+                let dot_product_term_2 = v2_minus_v1.dot(&x2_minus_x1) / (distance * distance);
+                let mut velocity_ball2 = velocity_updates[j]
+                    .subtract(&x2_minus_x1.scale(dot_product_term_2 * mass_term_2));
+
+                if velocity_ball2.norm() > 100.0 {
+                    velocity_ball2 = velocity_ball2.normalize().scale(100.0);
+                }
+                if velocity_ball1.norm() > 100.0 {
+                    velocity_ball1 = velocity_ball1.normalize().scale(100.0);
+                }
+
+                velocity_updates[i] = velocity_ball1;
+                velocity_updates[j] = velocity_ball2;
             }
         }
 

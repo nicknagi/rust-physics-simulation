@@ -18,6 +18,7 @@ struct Ball {
     acceleration: Vector2D,
     velocity: Vector2D,
     location: Vector2D,
+    prev_location: Vector2D, // Location info for t-1 for collision calculations
     radius: f64,
     color: [f32; 4],
     mass: f64, // Mass in KG
@@ -128,6 +129,8 @@ impl Simulation {
                 y: ball.velocity.y + ball.acceleration.y * args.dt * self.simulation_factor as f64,
             };
 
+            ball.prev_location = ball.location;
+
             // Update ball location
             ball.location = Vector2D {
                 x: ball.location.x + ball.velocity.x * self.simulation_factor as f64 * args.dt,
@@ -195,6 +198,27 @@ impl Simulation {
                 // TODO: Solve parametric equation solution to find right intersection point, then backtrack delta_t
                 //       Then, compute collision response and compensate for time
 
+                // Solving parametric equations for backtracking
+                // source: http://people.scs.carleton.ca/~nussbaum/courses/COMP3501/notes/collision_2012.pdf
+                let v = ball1.prev_location.subtract(&ball2.prev_location);
+                let u = (location_updates[i].subtract(&ball1.prev_location)).subtract(&location_updates[j].subtract(&ball2.prev_location));
+                let uv = u.dot(&v);
+                let u_squared = u.norm().powi(2);
+                let v_squared = v.norm().powi(2);
+
+                let determinant = (uv.powi(2) - (u_squared * (v_squared - (ball1.radius + ball2.radius).powi(2)))).sqrt();
+                let t2 = (-uv - determinant) / u_squared;
+                let mut backtrack_time = 0.0;                
+                if t2 < 1.0 {
+                    location_updates[i] = ball1.prev_location.add(&(location_updates[i].subtract(&ball1.prev_location)).scale(t2));
+                    location_updates[j] = ball2.prev_location.add(&(location_updates[j].subtract(&ball2.prev_location)).scale(t2));
+                    backtrack_time = (location_updates[i].subtract(&ball1.prev_location)).scale(1.0 - t2).norm() / velocity_updates[i].norm();
+                    let backtrack_time2 = (location_updates[j].subtract(&ball2.prev_location)).scale(1.0 - t2).norm() / velocity_updates[j].norm();
+                    if (backtrack_time - backtrack_time2).abs() > 1e-6 {
+                        println!("Wow this should not be happening {}, {}", backtrack_time, backtrack_time2);
+                    }
+                }
+
                 // Update the particle velocities
                 let v1_minus_v2 = velocity_updates[i].subtract(&velocity_updates[j]);
                 let x1_minus_x2 = location_updates[i].subtract(&location_updates[j]);
@@ -212,6 +236,11 @@ impl Simulation {
                 
                 velocity_updates[i] = velocity_ball1;
                 velocity_updates[j] = velocity_ball2;
+
+                if t2 < 1.0 {
+                    location_updates[i] = location_updates[i].add(&velocity_updates[i].scale(backtrack_time));
+                    location_updates[j] = location_updates[j].add(&velocity_updates[j].scale(backtrack_time));
+                }
             }
         }
 
@@ -266,6 +295,7 @@ fn main() {
                 x: rng.gen_range(0.0..(width)),
                 y: rng.gen_range(0.0..(height)),
             },
+            prev_location: Vector2D { x: 0.0, y: 0.0 },
             radius,
             color: [
                 rng.gen_range(0.2..1.0),

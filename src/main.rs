@@ -72,7 +72,7 @@ pub struct Simulation {
     gl: GlGraphics,   // OpenGL drawing backend.
     balls: Vec<Ball>, // Collection of objects in scene
     resolution: (f64, f64),
-    simulation_factor: u32,
+    simulation_factor: f64,
 }
 
 impl Simulation {
@@ -172,11 +172,11 @@ impl Simulation {
     fn check_for_collisions_and_update_velocity(&mut self) -> Vec<Ball> {
         let mut sorted_balls = self.balls.to_vec();
         sorted_balls.sort_by(|a, b| a.location.x.partial_cmp(&b.location.x).unwrap());
-        let mut collision_updates: Vec<Vector2D> = Vec::new();
+        let mut velocity_updates: Vec<Vector2D> = Vec::new();
         let mut location_updates: Vec<Vector2D> = Vec::new();
 
         for i in 0..sorted_balls.len() {
-            collision_updates.push(sorted_balls[i].velocity);
+            velocity_updates.push(sorted_balls[i].velocity);
             location_updates.push(sorted_balls[i].location);
         }
 
@@ -184,12 +184,15 @@ impl Simulation {
             for j in (i + 1)..sorted_balls.len() {
                 let ball1 = &sorted_balls[i];
                 let ball2 = &sorted_balls[j];
-                let is_collision_x = (location_updates[i].x - location_updates[j].x).abs()
-                    <= (ball1.radius + ball2.radius);
-                let is_collision_y = (location_updates[i].y - location_updates[j].y).abs()
+                let is_collision_possible_collision = (location_updates[i].x - location_updates[j].x).abs()
                     <= (ball1.radius + ball2.radius);
 
-                let is_collision = is_collision_x && is_collision_y;
+                if !is_collision_possible_collision {
+                    break;
+                }
+
+                let is_collision = location_updates[i].subtract(&location_updates[j]).norm() <= ball1.radius + ball2.radius;
+
                 if !is_collision {
                     break;
                 }
@@ -201,27 +204,30 @@ impl Simulation {
                 location_updates[j] = location_updates[i].add(&loc_update);
 
                 // Update the particle velocities
-                let v1_minus_v2 = collision_updates[i].subtract(&collision_updates[j]);
+                let v1_minus_v2 = velocity_updates[i].subtract(&velocity_updates[j]);
                 let x1_minus_x2 = location_updates[i].subtract(&location_updates[j]);
                 let distance = x1_minus_x2.norm();
                 
                 let mass_term_1 = (2.0 * ball2.mass) / (ball1.mass + ball2.mass);
                 let dot_product_term_1 = v1_minus_v2.dot(&x1_minus_x2) / (distance * distance);
-                let velocity_ball1 = collision_updates[i].subtract(&x1_minus_x2.scale(dot_product_term_1 * mass_term_1));
+                let velocity_ball1 = velocity_updates[i].subtract(&x1_minus_x2.scale(dot_product_term_1 * mass_term_1));
 
                 let mass_term_2 = (2.0 * ball1.mass) / (ball1.mass + ball2.mass);
                 let v2_minus_v1 = v1_minus_v2.scale(-1.0);
                 let x2_minus_x1 = x1_minus_x2.scale(-1.0);
                 let dot_product_term_2 = v2_minus_v1.dot(&x2_minus_x1) / (distance * distance);
-                let velocity_ball2 = collision_updates[j].subtract(&x2_minus_x1.scale(dot_product_term_2 * mass_term_2));
+                let velocity_ball2 = velocity_updates[j].subtract(&x2_minus_x1.scale(dot_product_term_2 * mass_term_2));
                 
-                collision_updates[i] = velocity_ball1;
-                collision_updates[j] = velocity_ball2;
+                velocity_updates[i] = velocity_ball1;
+                velocity_updates[j] = velocity_ball2;
+
+                // TODO: figure out genuine path after collision. how? by doing the resolve and figuring out how much time has been
+                // rewinded then go in the trajectory of the new velocity for that time to get the final location
             }
         }
 
         for i in 0..sorted_balls.len() {
-            sorted_balls[i].velocity = collision_updates[i];
+            sorted_balls[i].velocity = velocity_updates[i];
             sorted_balls[i].location = location_updates[i];
         }
 
@@ -287,7 +293,7 @@ fn main() {
         gl: GlGraphics::new(opengl),
         balls: balls,
         resolution: (width, height),
-        simulation_factor: 1,
+        simulation_factor: 1.0,
     };
 
     let mut events = Events::new(EventSettings::new());

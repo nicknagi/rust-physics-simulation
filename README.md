@@ -2,6 +2,12 @@
 
 A simple physics simulation built with Rust. Goal of the project was to learn basic rust while doing something fun.
 
+## How To Run
+
+Simply download the binary from the releases tab and run!
+
+If you would rather compile yourself, then run ```cargo build --release``` from the project root.
+
 ## Implementation
 
 Implementation is not the most efficient but works well up to 10000 particles.

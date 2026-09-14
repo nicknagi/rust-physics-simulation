@@ -29,7 +29,18 @@ struct Params {
     /// `gravity`: a dominant central mass is what makes orbits Keplerian and
     /// therefore stable.
     central_gm: f32,
+
+    /// Cursor-driven well: positive attracts, negative repels, 0 is off.
+    /// Position is in domain space, not window space.
+    well_gm: f32,
+    well_x: f32,
+    well_y: f32,
+    _pad: f32,
 };
+
+/// The well is deliberately broad -- it should stir the field rather than spear
+/// individual particles, so it softens over 40px against the physics' 4-8px.
+const WELL_SOFTENING_SQ: f32 = 1600.0;
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read_write> bin_counts: array<atomic<u32>>;
@@ -137,7 +148,14 @@ fn integrate(
         acc = acc + d * (P.central_gm / d2 * inverseSqrt(d2));
     }
 
-    if (P.gravity != 0u || P.central_gm > 0.0) {
+    if (P.well_gm != 0.0) {
+        let w = vec2<f32>(P.well_x, P.well_y);
+        let d = w - p0;
+        let d2 = dot(d, d) + WELL_SOFTENING_SQ;
+        acc = acc + d * (P.well_gm / d2 * inverseSqrt(d2));
+    }
+
+    if (P.gravity != 0u || P.central_gm > 0.0 || P.well_gm != 0.0) {
         v = v + acc * P.dt;
         let speed_sq = dot(v, v);
         if (speed_sq > P.max_speed * P.max_speed) {

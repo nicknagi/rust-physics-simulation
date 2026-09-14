@@ -10,7 +10,7 @@ use std::time::Instant;
 use simulation::gpu::{GpuRenderer, GpuSim};
 use simulation::{Config, DiscSpawn, Sim};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -29,6 +29,7 @@ struct Options {
     whirl: bool,
     dot_size: f32,
     central_gm: f32,
+    well_gm: Option<f32>,
     seed: u64,
     vsync: bool,
 }
@@ -46,6 +47,7 @@ impl Default for Options {
             whirl: false,
             dot_size: 0.0,
             central_gm: 2.0e7,
+            well_gm: None,
             seed: 12345,
             vsync: true,
         }
@@ -76,6 +78,7 @@ fn parse() -> Option<Options> {
             "--whirl" => o.whirl = true,
             "--dot-size" => o.dot_size = next(&mut i).parse().unwrap_or(o.dot_size),
             "--central-gm" => o.central_gm = next(&mut i).parse().unwrap_or(o.central_gm),
+            "--well-gm" => o.well_gm = next(&mut i).parse().ok(),
             "--no-vsync" => o.vsync = false,
             "-h" | "--help" => {
                 println!(
@@ -99,11 +102,13 @@ OPTIONS:
         --whirl           orbiting ring around a central mass (see README)
         --dot-size <D>    drawn particle size, independent of collision radius
         --central-gm <G>  strength of the central attractor  [default: 2e7]
+        --well-gm <G>     cursor well strength    [default: 5x the central mass]
         --no-vsync        uncap the frame rate
     -h, --help            show this message
 
 CONTROLS:
-    G  toggle gravity     Space  pause     Esc  quit"
+    G  toggle gravity     Space  pause     Esc  quit
+    drag left mouse to attract particles, right mouse to repel"
                 );
                 return None;
             }
@@ -122,6 +127,9 @@ struct Gfx {
     config: wgpu::SurfaceConfiguration,
     sim: GpuSim,
     renderer: GpuRenderer,
+    /// Domain size, for mapping cursor position out of window space.
+    domain: (f32, f32),
+    well_gm: f32,
 }
 
 struct App {
@@ -130,6 +138,11 @@ struct App {
     last_frame: Instant,
     accumulator: f32,
     paused: bool,
+    /// Cursor in physical window pixels.
+    cursor: (f64, f64),
+    /// Which button is currently driving the well, if any.
+    well_button: Option<MouseButton>,
+    last_well: (f32, f32, f32),
     frames: u32,
     last_report: Instant,
 }
@@ -142,6 +155,9 @@ impl App {
             last_frame: Instant::now(),
             accumulator: 0.0,
             paused: false,
+            cursor: (0.0, 0.0),
+            well_button: None,
+            last_well: (0.0, 0.0, 0.0),
             frames: 0,
             last_report: Instant::now(),
         }
@@ -292,7 +308,7 @@ impl App {
             &seed_sim.vy,
             &seed_sim.color,
         );
-        let renderer = GpuRenderer::new(&device, format, &sim);
+        let mut renderer = GpuRenderer::new(&device, format, &sim);
         // Drawn size is independent of the collision radius: a whirl wants
         // near-point masses for the physics but visible dots on screen.
         let dot = if self.opts.dot_size > 0.0 {
@@ -342,6 +358,7 @@ impl App {
             );
         }
         println!("G toggles gravity, Space pauses, Esc quits.");
+        println!("Drag left mouse to attract particles, right mouse to repel.");
 
         self.gfx = Some(Gfx {
             window,
@@ -351,6 +368,15 @@ impl App {
             config,
             sim,
             renderer,
+            domain: (cfg.width, cfg.height),
+            // Their tuning: the well wants to be a few times the central mass.
+            // With no central mass, fall back to a strength that reads well
+            // against the default scatter.
+            well_gm: self.opts.well_gm.unwrap_or(if cfg.central_gm > 0.0 {
+                cfg.central_gm * 5.0
+            } else {
+                1.0e8
+            }),
         });
         self.last_frame = Instant::now();
         self.last_report = Instant::now();
@@ -364,6 +390,29 @@ impl App {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.25);
         self.last_frame = now;
+
+        // Map the cursor out of window space into domain space. The render pass
+        // stretches the whole domain across the whole surface, so this is just a
+        // ratio -- no view offset, unlike a panned viewport.
+        let well_gm = match self.well_button {
+            Some(MouseButton::Left) => gfx.well_gm,
+            Some(MouseButton::Right) => -gfx.well_gm,
+            _ => 0.0,
+        };
+        let well = if well_gm != 0.0 {
+            let wx = (self.cursor.0 / gfx.config.width.max(1) as f64) as f32 * gfx.domain.0;
+            let wy = (self.cursor.1 / gfx.config.height.max(1) as f64) as f32 * gfx.domain.1;
+            (well_gm, wx, wy)
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+        // Only touch the uniform when it actually changes: rewriting a buffer
+        // the in-flight frame is still reading costs real frame rate.
+        if well != self.last_well {
+            gfx.sim.set_well(well.0, well.1, well.2);
+            gfx.renderer.set_well(&gfx.queue, well.0, well.1, well.2);
+            self.last_well = well;
+        }
 
         if !self.paused {
             self.accumulator += dt;
@@ -436,6 +485,19 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => self.frame(),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x, position.y);
+            }
+            WindowEvent::MouseInput { state, button, .. } => match state {
+                ElementState::Pressed => self.well_button = Some(button),
+                // Only clear if this is the button actually driving the well,
+                // so releasing the other one does not cancel it.
+                ElementState::Released => {
+                    if self.well_button == Some(button) {
+                        self.well_button = None;
+                    }
+                }
+            },
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state != ElementState::Pressed {
                     return;

@@ -38,6 +38,11 @@ struct Params {
     gravity: u32,
     cell_size: f32,
     central_gm: f32,
+
+    well_gm: f32,
+    well_x: f32,
+    well_y: f32,
+    _pad: f32,
 }
 
 #[repr(C)]
@@ -46,7 +51,11 @@ struct RenderParams {
     width: f32,
     height: f32,
     radius: f32,
-    _pad: f32,
+    well_gm: f32,
+    well_x: f32,
+    well_y: f32,
+    _pad0: f32,
+    _pad1: f32,
 }
 
 pub struct GpuContext {
@@ -112,6 +121,9 @@ pub struct GpuSim {
     pipe_integrate: wgpu::ComputePipeline,
     pipe_bin: wgpu::ComputePipeline,
     pipe_collide: wgpu::ComputePipeline,
+
+    /// Cursor well, in domain space. `gm` of 0 disables it.
+    well: (f32, f32, f32),
 }
 
 impl GpuSim {
@@ -305,11 +317,20 @@ impl GpuSim {
             pipe_integrate: pipe("integrate"),
             pipe_bin: pipe("bin"),
             pipe_collide: pipe("collide"),
+            well: (0.0, 0.0, 0.0),
         }
     }
 
     pub fn len(&self) -> usize {
         self.count as usize
+    }
+
+    /// Point the cursor well at `(x, y)` in **domain** space. `gm` is positive
+    /// to attract, negative to repel, zero to switch it off. Same
+    /// `gm / d^2 * d_hat` form as the central attractor, and likewise unclamped
+    /// -- `max_speed` already bounds any fling.
+    pub fn set_well(&mut self, gm: f32, x: f32, y: f32) {
+        self.well = (gm, x, y);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -343,6 +364,10 @@ impl GpuSim {
             gravity: self.cfg.gravity as u32,
             cell_size: self.cfg.radius * 2.0,
             central_gm: self.cfg.central_gm,
+            well_gm: self.well.0,
+            well_x: self.well.1,
+            well_y: self.well.2,
+            _pad: 0.0,
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&p));
     }
@@ -495,8 +520,10 @@ impl GpuSim {
 /// buffer, so no particle data crosses the bus per frame.
 pub struct GpuRenderer {
     pipeline: wgpu::RenderPipeline,
+    halo_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     params: wgpu::Buffer,
+    state: RenderParams,
 }
 
 impl GpuRenderer {
@@ -567,47 +594,72 @@ impl GpuRenderer {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("particles"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let make_pipeline = |label: &str, vs: &str, fs: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(vs),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fs),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        let pipeline = make_pipeline("particles", "vs", "fs");
+        let halo_pipeline = make_pipeline("well halo", "vs_halo", "fs_halo");
 
         GpuRenderer {
             pipeline,
+            halo_pipeline,
             bind_group,
             params,
+            state: RenderParams {
+                width: 0.0,
+                height: 0.0,
+                radius: 1.0,
+                well_gm: 0.0,
+                well_x: 0.0,
+                well_y: 0.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
+            },
         }
     }
 
-    pub fn set_viewport(&self, queue: &wgpu::Queue, width: f32, height: f32, radius: f32) {
-        let p = RenderParams {
-            width,
-            height,
-            radius,
-            _pad: 0.0,
-        };
-        queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&p));
+    pub fn set_viewport(&mut self, queue: &wgpu::Queue, width: f32, height: f32, radius: f32) {
+        self.state.width = width;
+        self.state.height = height;
+        self.state.radius = radius;
+        self.upload(queue);
+    }
+
+    /// Cursor well indicator, in domain space. `gm` of 0 hides it.
+    pub fn set_well(&mut self, queue: &wgpu::Queue, gm: f32, x: f32, y: f32) {
+        self.state.well_gm = gm;
+        self.state.well_x = x;
+        self.state.well_y = y;
+        self.upload(queue);
+    }
+
+    fn upload(&self, queue: &wgpu::Queue) {
+        queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&self.state));
     }
 
     pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, count: u32) {
@@ -632,9 +684,14 @@ impl GpuRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(&self.pipeline);
         // Six vertices per particle, generated in the vertex shader.
         pass.draw(0..6, 0..count);
+
+        if self.state.well_gm != 0.0 {
+            pass.set_pipeline(&self.halo_pipeline);
+            pass.draw(0..6, 0..1);
+        }
     }
 }

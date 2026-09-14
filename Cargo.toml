@@ -1,18 +1,30 @@
 [package]
-
 name = "simulation"
-version = "0.1.0"
-authors = [
-    "Nekhil Nagia"
-]
-edition = "2018"
+version = "0.2.0"
+authors = ["Nekhil Nagia"]
+edition = "2021"
+
+[lib]
+name = "simulation"
+path = "src/lib.rs"
 
 [[bin]]
 name = "simulation"
+path = "src/main.rs"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
 
 [dependencies]
-piston = "0.53.0"
-piston2d-graphics = "0.40.0"
-pistoncore-glutin_window = "0.69.0"
-piston2d-opengl_graphics = "0.78.0"
-rand = "0.8.3"
+piston = "1.0.0"
+piston2d-graphics = "0.45.0"
+pistoncore-glutin_window = "0.73.2"
+piston2d-opengl_graphics = "0.89.0"
+rand = "0.10.2"
+rayon = "1.12.0"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

@@ -5,6 +5,7 @@
 //! `f32` so the hot loops stay cache-dense and auto-vectorize.
 
 pub mod bh;
+pub mod gpu;
 pub mod grid;
 pub mod render;
 pub mod sim;

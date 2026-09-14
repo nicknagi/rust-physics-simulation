@@ -16,6 +16,14 @@ path = "src/main.rs"
 name = "bench"
 path = "src/bin/bench.rs"
 
+[[bin]]
+name = "gpu"
+path = "src/bin/gpu.rs"
+
+[[bin]]
+name = "gpubench"
+path = "src/bin/gpubench.rs"
+
 [dependencies]
 piston = "1.0.0"
 piston2d-graphics = "0.45.0"
@@ -23,6 +31,10 @@ pistoncore-glutin_window = "0.73.2"
 piston2d-opengl_graphics = "0.89.0"
 rand = "0.10.2"
 rayon = "1.12.0"
+wgpu = "30.0.1"
+winit = "0.30.13"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+pollster = "1.0.1"
 
 [profile.release]
 opt-level = 3

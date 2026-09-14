@@ -1,7 +1,8 @@
 # Rust Physics Simulation
 
 A 2D particle physics simulation in Rust. Started as a project to learn the
-language; since rewritten for throughput.
+language; since rewritten for throughput, with both a multithreaded CPU backend
+and a GPU backend (wgpu, running on Metal here).
 
 ## How To Run
 
@@ -15,11 +16,19 @@ Controls: `G` toggles gravity, `Space` pauses, `R` respawns, `Esc` quits.
 
 `--interactive` restores the original stdin prompts.
 
-Headless benchmark, which measures the physics with no window or vsync in the way:
+GPU backend:
 
 ```
-cargo run --release --bin bench -- --sweep
-cargo run --release --bin bench -- --particles 100000 --gravity
+cargo run --release --bin gpu -- --particles 200000 --radius 1
+cargo run --release --bin gpu -- --help
+```
+
+Headless benchmarks, which measure the physics with no window or vsync in the way:
+
+```
+cargo run --release --bin bench     -- --sweep          # CPU
+cargo run --release --bin gpubench  -- --sweep          # GPU vs CPU
+cargo run --release --bin gpubench  -- -n 5000 -s 200   # GPU, with validation
 ```
 
 ## Implementation
@@ -93,6 +102,75 @@ Two caveats, stated plainly:
   throttling, which is why the tables above report per-operation cost rather
   than fps.
 
+## GPU backend
+
+`src/gpu.rs` plus `src/shaders/*.wgsl` run the whole simulation on the GPU
+through wgpu (Metal on Apple Silicon). Particle state is uploaded once and then
+never leaves GPU memory: the compute passes write the position buffer and the
+render pipeline instances directly off that same buffer.
+
+One step is four dispatches — `clear_bins`, `integrate`, `bin`, `collide` —
+inside a single compute pass, which the WebGPU spec already orders and
+memory-synchronises, so no explicit barriers are needed.
+
+**Collision response gathers rather than scatters.** Each thread reads its
+neighbours and writes only its own particle, so the pass needs no atomics and
+has no races. The response is antisymmetric, so the partner thread derives
+exactly the opposite impulse from the same inputs and momentum is conserved.
+(The one case needing care is exactly coincident particles: the fallback
+separation axis flips with index order, otherwise both threads would push the
+same way and the pair would never separate.)
+
+**Rendering** generates six vertices per particle in the vertex shader and
+carves a disc out of them in the fragment shader. There is no vertex buffer and
+no per-frame geometry upload.
+
+### GPU vs CPU, milliseconds per step
+
+Headless, M1 Pro, radius 4, domain scaled to constant packing:
+
+| particles | mode | CPU | GPU | |
+|---|---|---|---|---|
+| 10,000 | collisions | 0.39 | **0.20** | 2.0× |
+| 50,000 | collisions | 1.26 | **0.36** | 3.5× |
+| 200,000 | collisions | 4.55 | **0.72** | 6.3× |
+| 500,000 | collisions | 11.8 | **4.51** | 2.6× |
+| 1,000,000 | collisions | 30.3 | **15.7** | 1.9× |
+| 10,000 | gravity | 2.67 | 2.67 | 1.0× |
+| 50,000 | gravity | **14.2** | 47.0 | 0.3× |
+| 200,000 | gravity | **60.1** | 690 | 0.09× |
+
+Interactively, the GPU build holds a vsync-locked 60 fps to at least 200k
+particles with the CPU essentially idle; uncapped it runs 220–250 fps at
+50k–200k and ~45 fps at 500k.
+
+### Two honest limitations
+
+**GPU gravity loses to CPU gravity above ~20k particles**, and the gap widens
+fast. This is not a hardware result, it is an algorithmic one: the GPU does an
+exact O(n²) pairwise sum while the CPU uses a Barnes-Hut tree at O(n log n).
+A fast processor running the wrong complexity class still loses. The GPU answer
+is the *more accurate* one — no opening-angle approximation — but for gravity at
+scale, use the CPU binary. The GPU app prints a warning when you ask for this.
+Fixing it properly means a tree or a multipole scheme on the GPU.
+
+**GPU collision speedup peaks near 200k and then decays.** Particles are stored
+in spawn order, so spatially adjacent particles are scattered through memory and
+the neighbour gather degenerates into random access across a bin table that is
+hundreds of megabytes at a million particles. The fix is to sort particles by
+cell so the gather reads contiguously, which needs a GPU radix sort.
+
+### GPU validation
+
+`gpubench` checks the GPU result against the invariants the CPU path is tested
+for. At 5,000 particles over 200 steps: all finite, zero out of bounds, zero
+breaches of the speed clamp, maximum particle overlap 0.0001 px against an 8 px
+diameter, and total kinetic energy within 2.2% of the CPU run. The two backends
+are not expected to match bit-for-bit — the CPU resolves collision pairs in
+sequence while the GPU gathers, so each particle sees its neighbours'
+pre-collision state.
+
+
 ## Fixes carried in the rewrite
 
 - **Unbounded loop.** Overlap was resolved by repeatedly stepping particles back
@@ -125,7 +203,8 @@ tightens).
 `cargo audit` reports no vulnerabilities. Four transitive crates are flagged
 unmaintained (`rusttype`, `ttf-parser` ×2, `paste`); all arrive through piston's
 font and image-codec stack, which this project does not use and cannot opt out
-of from here.
+of from here. The wgpu and winit stack adds no advisories. Dropping piston in
+favour of the wgpu front-end would clear all four.
 
 `.cargo/config.toml` sets `target-cpu=native`. Delete it when building portable
 binaries.

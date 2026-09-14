@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use simulation::gpu::{GpuRenderer, GpuSim};
-use simulation::{Config, Sim};
+use simulation::{Config, DiscSpawn, Sim};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -24,6 +24,11 @@ struct Options {
     width: f32,
     height: f32,
     gravity: bool,
+    gravity_scale: f32,
+    speed: f32,
+    whirl: bool,
+    dot_size: f32,
+    central_gm: f32,
     seed: u64,
     vsync: bool,
 }
@@ -36,6 +41,11 @@ impl Default for Options {
             width: 1600.0,
             height: 900.0,
             gravity: false,
+            gravity_scale: 1.0,
+            speed: 1.0,
+            whirl: false,
+            dot_size: 0.0,
+            central_gm: 2.0e7,
             seed: 12345,
             vsync: true,
         }
@@ -58,6 +68,14 @@ fn parse() -> Option<Options> {
             "--height" => o.height = next(&mut i).parse().unwrap_or(o.height),
             "--seed" => o.seed = next(&mut i).parse().unwrap_or(o.seed),
             "-g" | "--gravity" => o.gravity = true,
+            "--gravity-scale" => {
+                o.gravity_scale = next(&mut i).parse().unwrap_or(o.gravity_scale);
+                o.gravity = true;
+            }
+            "--speed" => o.speed = next(&mut i).parse().unwrap_or(o.speed),
+            "--whirl" => o.whirl = true,
+            "--dot-size" => o.dot_size = next(&mut i).parse().unwrap_or(o.dot_size),
+            "--central-gm" => o.central_gm = next(&mut i).parse().unwrap_or(o.central_gm),
             "--no-vsync" => o.vsync = false,
             "-h" | "--help" => {
                 println!(
@@ -73,7 +91,14 @@ OPTIONS:
         --width <W>       window width              [default: 1600]
         --height <H>      window height             [default: 900]
     -g, --gravity         enable gravity (exact O(n^2) on GPU; see README)
+        --gravity-scale <S>  scale gravity strength, 1 = default (implies -g)
+        --speed <S>       scale initial velocities, 1 = default. Weak gravity is
+                          only visible if the particles start slow enough for it
+                          to dominate.
         --seed <S>        RNG seed
+        --whirl           orbiting ring around a central mass (see README)
+        --dot-size <D>    drawn particle size, independent of collision radius
+        --central-gm <G>  strength of the central attractor  [default: 2e7]
         --no-vsync        uncap the frame rate
     -h, --help            show this message
 
@@ -189,17 +214,74 @@ impl App {
 
         // The simulation domain is the window in logical pixels; the render pass
         // maps world space onto whatever the surface currently is.
+        // The whirl preset needs a very different regime from the default
+        // scatter: a dominant central mass for Keplerian orbits, a small
+        // collision radius (collisions in a sheared disc spread it viscously),
+        // and weak mutual gravity (a cold self-gravitating ring clumps apart).
+        // See the README for the measurements behind these numbers.
+        let (radius, gravity_scale, central_gm) = if self.opts.whirl {
+            (
+                if self.opts.radius == Options::default().radius {
+                    0.4
+                } else {
+                    self.opts.radius
+                },
+                if self.opts.gravity_scale == 1.0 {
+                    1.0e-5
+                } else {
+                    self.opts.gravity_scale
+                },
+                self.opts.central_gm,
+            )
+        } else {
+            (self.opts.radius, self.opts.gravity_scale, 0.0)
+        };
+
         let cfg = Config {
             width: self.opts.width,
             height: self.opts.height,
-            radius: self.opts.radius,
-            gravity: self.opts.gravity,
+            radius,
+            gravity: self.opts.gravity || self.opts.whirl,
+            central_gm,
+            // Gravity enters the shader only as G * mass, so scaling mass is
+            // exactly a strength dial. Collisions are equal-mass and unaffected.
+            mass: Config::default().mass * gravity_scale,
             ..Config::default()
         };
 
         // Spawn on the CPU once, purely to produce the initial state.
         let mut seed_sim = Sim::new(cfg);
-        seed_sim.spawn_random(self.opts.particles, self.opts.seed);
+        let mut cfg = cfg;
+        if self.opts.whirl {
+            // Leave margin to the walls: a ring sized right up to the edge
+            // turns any outward drift into a wall bounce, which wrecks it.
+            let outer = (cfg.width.min(cfg.height) * 0.33).max(40.0);
+            let fastest = seed_sim.spawn_orbital_disc(DiscSpawn {
+                count: self.opts.particles,
+                seed: self.opts.seed,
+                inner_radius: outer * 0.35,
+                outer_radius: outer,
+                clockwise: false,
+            });
+            // Clamping an orbit destroys the angular momentum holding the ring
+            // up, so lift the cap clear of the fastest orbit.
+            cfg.max_speed = fastest * 4.0;
+            seed_sim.cfg.max_speed = cfg.max_speed;
+            println!(
+                "whirl: ring {:.0}..{:.0} px, central_gm {:.1e}, fastest orbit {:.0} px/s",
+                outer * 0.34,
+                outer,
+                cfg.central_gm,
+                fastest
+            );
+        } else {
+            seed_sim.spawn_random(self.opts.particles, self.opts.seed);
+        }
+        if self.opts.speed != 1.0 {
+            for v in seed_sim.vx.iter_mut().chain(seed_sim.vy.iter_mut()) {
+                *v *= self.opts.speed;
+            }
+        }
 
         let sim = GpuSim::new(
             &device,
@@ -211,18 +293,32 @@ impl App {
             &seed_sim.color,
         );
         let renderer = GpuRenderer::new(&device, format, &sim);
-        renderer.set_viewport(&queue, cfg.width, cfg.height, cfg.radius);
+        // Drawn size is independent of the collision radius: a whirl wants
+        // near-point masses for the physics but visible dots on screen.
+        let dot = if self.opts.dot_size > 0.0 {
+            self.opts.dot_size
+        } else if self.opts.whirl {
+            (cfg.radius * 4.0).max(1.6)
+        } else {
+            cfg.radius
+        };
+        renderer.set_viewport(&queue, cfg.width, cfg.height, dot);
 
         // Particles occupy area; past roughly 60% the domain cannot hold them
         // and the run degenerates into a jammed solid that also overflows the
         // per-cell bin capacity, so the numbers stop meaning anything.
         let packing = self.opts.particles as f32 * std::f32::consts::PI * cfg.radius * cfg.radius
             / (cfg.width * cfg.height);
+        let _ = &packing;
         println!(
             "{} particles, radius {}, gravity {}, packing {:.0}%",
             sim.len(),
             cfg.radius,
-            if cfg.gravity { "on" } else { "off" },
+            if cfg.gravity {
+                format!("on (scale {gravity_scale:e})")
+            } else {
+                "off".to_string()
+            },
             packing * 100.0
         );
         // GPU gravity is an exact pairwise sum. That is more accurate than the

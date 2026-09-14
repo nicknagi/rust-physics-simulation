@@ -154,6 +154,12 @@ is the *more accurate* one — no opening-angle approximation — but for gravit
 scale, use the CPU binary. The GPU app prints a warning when you ask for this.
 Fixing it properly means a tree or a multipole scheme on the GPU.
 
+**Long unbroken GPU compute runs lose the device.** Roughly 2.2 seconds of
+continuous compute on macOS drops the device and fails the next buffer map,
+regardless of how the work is split across command buffers or how it is polled.
+`GpuSim::run_steps` slices long runs with a hard fence between slices. The
+windowed app never approaches this, since it runs at most 8 substeps per frame.
+
 **GPU collision speedup peaks near 200k and then decays.** Particles are stored
 in spawn order, so spatially adjacent particles are scattered through memory and
 the neighbour gather degenerates into random access across a bin table that is
@@ -169,6 +175,57 @@ diameter, and total kinetic energy within 2.2% of the CPU run. The two backends
 are not expected to match bit-for-bit — the CPU resolves collision pairs in
 sequence while the GPU gathers, so each particle sees its neighbours'
 pre-collision state.
+
+
+## The whirl preset
+
+`gpu --whirl` spawns an orbiting ring -- particles circling a common centre.
+`Sim::spawn_orbital_disc` builds it, and getting one that actually persists took
+three separate corrections, each found by measurement rather than assumption.
+`cargo run --release --example whirl_stability` reproduces the numbers.
+
+**Orbital speeds cannot come from `v = sqrt(G * M_enclosed / r)`.** That is the
+spherical shell theorem. This is a flat disc under a 1/r^2 force, where mass
+outside a given radius does not cancel, and using it made the ring collapse
+immediately (rms radius 248 -> 61 in five seconds). The spawner instead lays
+down positions, evaluates the *real* acceleration field, and gives each particle
+the speed `v = sqrt(a_inward * r)` that balances the pull it genuinely feels.
+
+**Self-gravity alone cannot hold a ring together.** A cold self-gravitating disc
+clumps, heats through close encounters, and spreads -- at every concentration,
+softening and particle count tried. Stable orbits need a dominant central mass,
+so `Config::central_gm` adds a fixed attractor at the centre of the domain,
+implemented in both backends. With it the orbits are Keplerian; a single
+particle holds its radius to within 0.3% over 50 seconds.
+
+**Collisions spread a sheared ring even with gravity off.** Neighbouring
+particles orbit at different speeds, so every collision transports angular
+momentum outward -- the same viscous spreading that real accretion discs show.
+At collision radius 1.5 the ring is gone in 20 seconds with self-gravity
+completely disabled. The preset therefore uses near-point masses (radius 0.4)
+and draws them larger than they collide, which is how particle discs are
+normally rendered; `--dot-size` controls the drawn size independently.
+
+Fraction of particles still in the ring, with a central mass at collision
+radius 0.4:
+
+| self-gravity | 10s | 20s | 30s | 40s | 50s | 60s |
+|---|---|---|---|---|---|---|
+| 1e-4 | 100% | 96% | 45% | 21% | 13% | 10% |
+| 3e-5 | 100% | 100% | 100% | 78% | 29% | 17% |
+| **1e-5** | **100%** | **100%** | **100%** | **100%** | **98%** | **51%** |
+| off | 100% | 100% | 100% | 100% | 83% | 29% |
+
+`--whirl` uses 1e-5. Note that a little mutual gravity beats none: weak cohesion
+resists the collisional spreading. Angular momentum is conserved to within 2.3%
+once walls and the speed clamp are kept out of the way -- both are external
+forces and either one silently drains it, which is why the ring is sized with
+margin to the walls and the speed clamp is lifted clear of the fastest orbit.
+
+```
+cargo run --release --bin gpu -- --whirl -n 4000
+cargo run --release --bin gpu -- --whirl -n 4000 --gravity-scale 1e-4   # breaks up sooner
+```
 
 
 ## Fixes carried in the rewrite

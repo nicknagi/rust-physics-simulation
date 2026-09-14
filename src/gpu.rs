@@ -37,7 +37,7 @@ struct Params {
     softening_sq: f32,
     gravity: u32,
     cell_size: f32,
-    _pad: u32,
+    central_gm: f32,
 }
 
 #[repr(C)]
@@ -342,7 +342,7 @@ impl GpuSim {
             softening_sq: self.cfg.softening * self.cfg.softening,
             gravity: self.cfg.gravity as u32,
             cell_size: self.cfg.radius * 2.0,
-            _pad: 0,
+            central_gm: self.cfg.central_gm,
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&p));
     }
@@ -387,19 +387,66 @@ impl GpuSim {
         queue.submit(Some(encoder.finish()));
     }
 
-    /// Run `steps` steps back to back in one submission, then block until the
-    /// GPU has finished. Submitting once keeps the measurement about the shaders
-    /// rather than per-submit driver overhead.
+    /// Run `steps` steps back to back, then block until the GPU has finished.
+    ///
+    /// Long runs are sliced with a hard fence between slices. Submit-and-poll
+    /// alone is not enough: measured here, roughly 2.2 seconds of uninterrupted
+    /// GPU compute loses the device on macOS no matter how the work is split
+    /// across command buffers, and the next buffer map then fails. The windowed
+    /// app never reaches this (at most 8 substeps per frame); it only shows up
+    /// when a benchmark asks for thousands of steps in one call.
     pub fn run_steps(&self, device: &wgpu::Device, queue: &wgpu::Queue, dt: f32, steps: usize) {
+        const STEPS_PER_SUBMIT: usize = 32;
+        const STEPS_PER_FENCE: usize = 256;
+
         self.write_params(queue, dt);
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("steps"),
-        });
-        for _ in 0..steps {
-            self.encode_step(&mut encoder);
+        let mut remaining = steps;
+        let mut since_fence = 0usize;
+        while remaining > 0 {
+            let batch = remaining.min(STEPS_PER_SUBMIT);
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("steps"),
+            });
+            for _ in 0..batch {
+                self.encode_step(&mut encoder);
+            }
+            let index = queue.submit(Some(encoder.finish()));
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(index),
+                    timeout: None,
+                })
+                .ok();
+            remaining -= batch;
+            since_fence += batch;
+            if since_fence >= STEPS_PER_FENCE && remaining > 0 {
+                self.fence(device, queue);
+                since_fence = 0;
+            }
         }
+        self.fence(device, queue);
+    }
+
+    /// Hard CPU/GPU sync: round-trip a few bytes through a buffer map, which
+    /// actually drains the queue rather than merely signalling it.
+    fn fence(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.count == 0 {
+            return;
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("fence"),
+        });
+        encoder.copy_buffer_to_buffer(&self.pos[0], 0, &self.readback, 0, 8);
         queue.submit(Some(encoder.finish()));
+
+        let slice = self.readback.slice(..8);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            tx.send(r).ok();
+        });
         device.poll(wgpu::PollType::wait_indefinitely()).ok();
+        let _ = rx.recv();
+        self.readback.unmap();
     }
 
     pub fn read_positions(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<[f32; 2]> {

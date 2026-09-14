@@ -37,8 +37,21 @@ pub struct Config {
     pub theta: f32,
     /// Plummer softening, stops close pairs producing huge accelerations.
     pub softening: f32,
+    /// `G * M` of a fixed attractor pinned at the centre of the domain, applied
+    /// independently of `gravity`. A dominant central mass makes orbits
+    /// Keplerian and therefore stable; a purely self-gravitating disc heats
+    /// itself apart no matter how it is tuned.
+    pub central_gm: f32,
     pub parallel: bool,
     pub solver_iterations: u32,
+}
+
+impl Config {
+    /// Whether anything contributes acceleration this step.
+    #[inline]
+    pub fn uses_acceleration(&self) -> bool {
+        self.gravity || self.central_gm != 0.0
+    }
 }
 
 impl Default for Config {
@@ -55,10 +68,23 @@ impl Default for Config {
             restitution: 1.0,
             theta: 0.7,
             softening: 4.0,
+            central_gm: 0.0,
             parallel: true,
             solver_iterations: 1,
         }
     }
+}
+
+/// How to lay out an orbiting ring for [`Sim::spawn_orbital_disc`].
+#[derive(Clone, Copy, Debug)]
+pub struct DiscSpawn {
+    pub count: usize,
+    pub seed: u64,
+    /// Hole in the middle. A non-zero inner radius avoids the very fast, very
+    /// short-period orbits near a central attractor.
+    pub inner_radius: f32,
+    pub outer_radius: f32,
+    pub clockwise: bool,
 }
 
 pub struct Sim {
@@ -139,6 +165,97 @@ impl Sim {
         self.ay.resize(n, 0.0);
     }
 
+    /// Spawn a rotating annulus in centrifugal balance -- a "whirl".
+    ///
+    /// Orbital speeds are calibrated against the *actual* gravitational field of
+    /// the spawned configuration: positions are laid down first, the real
+    /// acceleration field is evaluated (central attractor included), and each
+    /// particle is given the tangential speed `v = sqrt(a_inward * r)` that
+    /// balances the inward pull it genuinely feels.
+    ///
+    /// Two things this deliberately does not do:
+    ///
+    /// - It does not use `v = sqrt(G * M_enclosed / r)`. That is the spherical
+    ///   shell theorem; this is a flat disc under a 1/r^2 force, where mass
+    ///   outside a radius does not cancel. Using it makes the disc collapse.
+    /// - It does not assume self-gravity alone will hold the ring together. A
+    ///   cold self-gravitating disc is unstable: it clumps, heats through close
+    ///   encounters, and expands regardless of tuning. Set `Config::central_gm`
+    ///   for orbits that persist.
+    ///
+    /// Returns the fastest orbital speed assigned, so the caller can widen
+    /// `max_speed` -- clamping an orbit destroys the angular momentum holding
+    /// the ring up.
+    pub fn spawn_orbital_disc(&mut self, spawn: DiscSpawn) -> f32 {
+        let DiscSpawn {
+            count: n,
+            seed,
+            inner_radius,
+            outer_radius,
+            clockwise,
+        } = spawn;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let cx = self.cfg.width * 0.5;
+        let cy = self.cfg.height * 0.5;
+        let (r_in, r_out) = (inner_radius.max(0.0), outer_radius.max(inner_radius + 1.0));
+
+        self.px.clear();
+        self.py.clear();
+        self.vx.clear();
+        self.vy.clear();
+        self.color.clear();
+
+        // Sampling r^2 uniformly between the radii gives uniform surface
+        // density; sampling r directly would pile particles toward the inside.
+        for _ in 0..n {
+            let u: f32 = rng.random_range(0.0..1.0);
+            let r = (r_in * r_in + u * (r_out * r_out - r_in * r_in)).sqrt();
+            let a: f32 = rng.random_range(0.0..std::f32::consts::TAU);
+            let (sin_a, cos_a) = a.sin_cos();
+            self.px.push(cx + r * cos_a);
+            self.py.push(cy + r * sin_a);
+            self.vx.push(0.0);
+            self.vy.push(0.0);
+
+            // Tint by starting radius, so the shear of the ring stays legible.
+            let t = ((r - r_in) / (r_out - r_in)).clamp(0.0, 1.0);
+            self.color
+                .push([0.35 + 0.65 * t, 0.55 - 0.20 * t, 1.0 - 0.55 * t, 0.95]);
+        }
+        self.ax.clear();
+        self.ax.resize(n, 0.0);
+        self.ay.clear();
+        self.ay.resize(n, 0.0);
+
+        // Measure the real field. Tighten the opening angle for this one-off
+        // evaluation: a sloppy field here becomes a permanently unbalanced ring.
+        let saved_theta = self.cfg.theta;
+        self.cfg.theta = saved_theta.min(0.3);
+        self.refresh_accelerations();
+        self.cfg.theta = saved_theta;
+
+        let spin = if clockwise { -1.0 } else { 1.0 };
+        let mut fastest = 0.0f32;
+        for i in 0..n {
+            let dx = self.px[i] - cx;
+            let dy = self.py[i] - cy;
+            let r = (dx * dx + dy * dy).sqrt();
+            if r < 1e-3 {
+                continue;
+            }
+            let (ux, uy) = (dx / r, dy / r);
+            let a_inward = -(self.ax[i] * ux + self.ay[i] * uy);
+            if a_inward <= 0.0 {
+                continue;
+            }
+            let v = (a_inward * r).sqrt();
+            fastest = fastest.max(v);
+            self.vx[i] = -uy * v * spin;
+            self.vy[i] = ux * v * spin;
+        }
+        fastest
+    }
+
     /// Install an exact particle set. Used by tests to build deterministic
     /// scenarios; panics if the component vectors disagree in length.
     pub fn set_particles(&mut self, px: Vec<f32>, py: Vec<f32>, vx: Vec<f32>, vy: Vec<f32>) {
@@ -173,7 +290,14 @@ impl Sim {
     }
 
     fn compute_accelerations(&mut self) {
+        if !self.cfg.uses_acceleration() {
+            return;
+        }
         if !self.cfg.gravity {
+            // Central attractor only: no tree needed.
+            self.ax.iter_mut().for_each(|a| *a = 0.0);
+            self.ay.iter_mut().for_each(|a| *a = 0.0);
+            self.add_central_acceleration();
             return;
         }
         let half = self.cfg.width.max(self.cfg.height) * 0.5;
@@ -231,6 +355,34 @@ impl Sim {
                 .zip(ay.chunks_mut(CHUNK))
                 .enumerate()
                 .for_each(|(ci, (axc, ayc))| eval(ci, axc, ayc));
+        }
+        self.add_central_acceleration();
+    }
+
+    fn add_central_acceleration(&mut self) {
+        let gm = self.cfg.central_gm;
+        if gm == 0.0 {
+            return;
+        }
+        let Sim {
+            px,
+            py,
+            ax,
+            ay,
+            cfg,
+            ..
+        } = self;
+        let cx = cfg.width * 0.5;
+        let cy = cfg.height * 0.5;
+        let soft_sq = cfg.softening * cfg.softening;
+        for i in 0..px.len() {
+            let dx = cx - px[i];
+            let dy = cy - py[i];
+            let d2 = dx * dx + dy * dy + soft_sq;
+            let inv_d = d2.sqrt().recip();
+            let a = gm / d2;
+            ax[i] += a * dx * inv_d;
+            ay[i] += a * dy * inv_d;
         }
     }
 
@@ -478,12 +630,12 @@ fn integrate_chunk(
     let (lo_x, hi_x, lo_y, hi_y) = bounds(cfg);
     let max_speed_sq = cfg.max_speed * cfg.max_speed;
     let e = cfg.restitution;
-    let gravity = cfg.gravity;
+    let accelerating = cfg.uses_acceleration();
 
     for k in 0..px.len() {
         let mut v_x = vx[k];
         let mut v_y = vy[k];
-        if gravity {
+        if accelerating {
             v_x += ax[k] * dt;
             v_y += ay[k] * dt;
         }

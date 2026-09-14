@@ -5,7 +5,7 @@
 //! (coincident-particle NaN, the unbounded separation loop, races in the
 //! parallel collision pass).
 
-use simulation::{Config, Sim};
+use simulation::{Config, DiscSpawn, Sim};
 
 fn base_cfg() -> Config {
     Config {
@@ -330,4 +330,77 @@ fn empty_and_single_particle_sims_do_not_panic() {
         sim.step(1.0 / 240.0);
     }
     assert!(!sim.has_non_finite());
+}
+
+/// A whirl must actually persist: an orbiting ring should keep almost all of
+/// its particles in the annulus it was launched in.
+///
+/// The configuration here is not arbitrary -- it is what the measurements
+/// settled on. A ring needs a dominant central mass (self-gravity alone clumps
+/// and heats it apart), a small collision radius (collisions in a sheared disc
+/// spread it viscously), and only weak mutual gravity.
+#[test]
+fn whirl_persists() {
+    let n = 2000;
+    let cfg = Config {
+        width: 1600.0,
+        height: 900.0,
+        radius: 0.4,
+        gravity: true,
+        parallel: true,
+        mass: 1e16 * 1.0e-5,
+        softening: 8.0,
+        central_gm: 2.0e7,
+        ..Config::default()
+    };
+    let mut sim = Sim::new(cfg);
+    let fastest = sim.spawn_orbital_disc(DiscSpawn {
+        count: n,
+        seed: 12345,
+        inner_radius: 104.0,
+        outer_radius: 297.0,
+        clockwise: false,
+    });
+    // Clamping an orbit destroys the angular momentum holding the ring up.
+    sim.cfg.max_speed = fastest * 4.0;
+
+    let (cx, cy) = (800.0f32, 450.0f32);
+    let retained = |s: &Sim| -> f32 {
+        let k = (0..s.len())
+            .filter(|&i| {
+                let r = ((s.px[i] - cx).powi(2) + (s.py[i] - cy).powi(2)).sqrt();
+                (85.0..330.0).contains(&r)
+            })
+            .count();
+        k as f32 / s.len() as f32
+    };
+    let spins = |s: &Sim| -> f64 {
+        (0..s.len())
+            .map(|i| {
+                let dx = (s.px[i] - cx) as f64;
+                let dy = (s.py[i] - cy) as f64;
+                dx * s.vy[i] as f64 - dy * s.vx[i] as f64
+            })
+            .sum()
+    };
+
+    assert!(fastest > 100.0, "orbits are implausibly slow: {fastest}");
+    let l0 = spins(&sim);
+
+    // 30 seconds of simulated time.
+    for _ in 0..7200 {
+        sim.step(1.0 / 240.0);
+    }
+
+    assert!(!sim.has_non_finite());
+    let kept = retained(&sim);
+    assert!(
+        kept > 0.9,
+        "whirl fell apart: only {:.0}% of particles still in the ring",
+        kept * 100.0
+    );
+    assert!(
+        spins(&sim).signum() == l0.signum(),
+        "ring reversed direction"
+    );
 }

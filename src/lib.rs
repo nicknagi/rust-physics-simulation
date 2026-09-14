@@ -11,5 +11,5 @@ pub mod render;
 pub mod sim;
 pub mod vec2;
 
-pub use sim::{Config, Sim};
+pub use sim::{Config, DiscSpawn, Sim};
 pub use vec2::{v2, Vec2};

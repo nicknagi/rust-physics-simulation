@@ -25,7 +25,10 @@ struct Params {
     softening_sq: f32,
     gravity: u32,
     cell_size: f32,
-    _pad: u32,
+    /// G * M of a fixed attractor at the centre of the domain. Independent of
+    /// `gravity`: a dominant central mass is what makes orbits Keplerian and
+    /// therefore stable.
+    central_gm: f32,
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -127,7 +130,14 @@ fn integrate(
 
     if (i >= P.count) { return; }
 
-    if (P.gravity != 0u) {
+    if (P.central_gm > 0.0) {
+        let c = vec2<f32>(P.width * 0.5, P.height * 0.5);
+        let d = c - p0;
+        let d2 = dot(d, d) + P.softening_sq;
+        acc = acc + d * (P.central_gm / d2 * inverseSqrt(d2));
+    }
+
+    if (P.gravity != 0u || P.central_gm > 0.0) {
         v = v + acc * P.dt;
         let speed_sq = dot(v, v);
         if (speed_sq > P.max_speed * P.max_speed) {

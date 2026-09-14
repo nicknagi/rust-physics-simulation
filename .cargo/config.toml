@@ -1,0 +1,4 @@
+# Tuned for the local machine (Apple Silicon). Remove this file when building
+# portable binaries for the releases tab -- it bakes in host-specific CPU features.
+[build]
+rustflags = ["-C", "target-cpu=native"]
